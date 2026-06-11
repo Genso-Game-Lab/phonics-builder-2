@@ -117,6 +117,17 @@
   }
   #againBtn, #slowBtn { background:#334155; }
   #nextBtn { background:linear-gradient(135deg,#22c55e,#16a34a); }
+
+  .course-list { display:flex; flex-direction:column; gap:10px; margin-top:10px; }
+  .course-btn {
+    display:flex; justify-content:space-between; align-items:center; gap:10px;
+    background:#0f172a; border:1px solid #334155; color:#e2e8f0;
+    border-radius:12px; padding:14px; font-size:.95rem; font-weight:bold;
+    cursor:pointer; text-align:left;
+  }
+  .course-btn:active { transform:scale(.98); }
+  .course-btn .meta { font-size:.68rem; color:#94a3b8; font-weight:normal; margin-top:4px; line-height:1.5; }
+  .course-btn .go { font-size:1.2rem; color:#22c55e; flex-shrink:0; }
 </style>
 </head>
 <body>
@@ -139,6 +150,7 @@
     <div class="qbtns">
       <button class="speakBtn" id="speakBtn">🔊 きく</button>
       <button id="hintBtn">ヒント💡</button>
+      <button id="courseBtn">📚 コース</button>
     </div>
   </div>
 
@@ -158,6 +170,13 @@
     <span class="t-magic">マジックe</span>
   </div>
   <div class="backlink"><a href="https://genso-game-lab.github.io/">🧪 ほかのゲームであそぶ</a></div>
+</div>
+
+<div class="overlay" id="courseOverlay">
+  <div class="card">
+    <h2>📚 コースをえらぼう</h2>
+    <div class="course-list" id="courseList"></div>
+  </div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -228,20 +247,59 @@ const LEVELS = [
   { w:"dream", pic:"💭", ja:"ゆめ",       parts:["d","r","ea","m"],     decoys:["ee","i"],  rule:"dr ブレンド ＋ ea「イー」", fun:"dream=ドリーム。最終ステージクリア、おめでとう！Follow your dreams!" },
 ];
 
+// ===== コース定義（10問ずつ） =====
+const COURSES = [
+  { name:"コース1 ブレンド入門", desc:"frog・stop・black など／子音を続けて読む", start:0 },
+  { name:"コース2 母音マスター", desc:"coin・bird・snow など／母音チームとあいまいアー", start:10 },
+  { name:"コース3 上級チャレンジ", desc:"snake・phone・school など／合わせ技と例外", start:20 },
+];
+const COURSE_LEN = 10;
+
 // ===== 状態 =====
-let saved = {};
-try { saved = JSON.parse(localStorage.getItem("phonicsBuilder2") || "{}"); } catch (e) {}
-let lv = Math.min(saved.lv || 0, LEVELS.length - 1);
-let score = saved.score || 0;
+let progress = null;
+try { progress = JSON.parse(localStorage.getItem("phonicsBuilder2v2") || "null"); } catch (e) {}
+if (!Array.isArray(progress) || progress.length !== COURSES.length) {
+  progress = COURSES.map(() => ({ lv: 0, score: 0, best: 0, cleared: false }));
+}
+let course = null;
 let seq = [];
 let hintUsed = false;
-let finished = false;
+let courseDone = false;
 
 const buildEl = document.getElementById("build");
 const toastEl = document.getElementById("toast");
 
 function save() {
-  localStorage.setItem("phonicsBuilder2", JSON.stringify({ lv, score }));
+  localStorage.setItem("phonicsBuilder2v2", JSON.stringify(progress));
+}
+
+function curLevel() {
+  return LEVELS[COURSES[course].start + progress[course].lv];
+}
+
+function showCourseSelect() {
+  course = null;
+  courseDone = false;
+  document.getElementById("winOverlay").classList.remove("show");
+  const list = document.getElementById("courseList");
+  list.innerHTML = "";
+  COURSES.forEach((c, i) => {
+    const p = progress[i];
+    let status;
+    if (p.lv > 0) status = `つづきから（${p.lv + 1}問目・いま${p.score}点）`;
+    else if (p.cleared) status = `⭐ クリアずみ！ベスト ${p.best}点（もう一回挑戦できる）`;
+    else status = "全10問・はじめから";
+    const b = document.createElement("button");
+    b.className = "course-btn";
+    b.innerHTML = `<span>${p.cleared ? "⭐ " : ""}${c.name}<div class="meta">${c.desc}<br>${status}</div></span><span class="go">▶</span>`;
+    b.addEventListener("click", () => {
+      course = i;
+      document.getElementById("courseOverlay").classList.remove("show");
+      startLevel();
+    });
+    list.appendChild(b);
+  });
+  document.getElementById("courseOverlay").classList.add("show");
 }
 
 function speak(text, rate) {
@@ -259,9 +317,9 @@ function speak(text, rate) {
 
 function startLevel() {
   seq = []; hintUsed = false;
-  const L = LEVELS[lv];
-  document.getElementById("stage").textContent = (lv + 1) + "/" + LEVELS.length;
-  document.getElementById("score").textContent = score;
+  const L = curLevel();
+  document.getElementById("stage").textContent = (progress[course].lv + 1) + "/" + COURSE_LEN;
+  document.getElementById("score").textContent = progress[course].score;
   document.getElementById("qPic").textContent = L.pic;
   document.getElementById("qJa").textContent = L.ja;
   document.getElementById("qRule").textContent = "📘 " + L.rule;
@@ -293,7 +351,7 @@ function removePart(i) {
 }
 
 function renderBuild() {
-  const L = LEVELS[lv];
+  const L = curLevel();
   buildEl.innerHTML = "";
   if (!seq.length) {
     buildEl.innerHTML = `<div class="empty">下のパーツを順番にタップして単語を作ろう（🔊で音をきける）</div>`;
@@ -314,13 +372,14 @@ function arraysEqual(a, b) {
 }
 
 function check() {
-  const L = LEVELS[lv];
+  const L = curLevel();
   if (!seq.length) { toast("まずはパーツを入れよう！🔊でお手本をきいてね"); return; }
   if (arraysEqual(seq, L.parts)) {
     const pts = hintUsed ? 50 : 100;
-    score += pts;
+    const p = progress[course];
+    p.score += pts;
     save();
-    document.getElementById("score").textContent = score;
+    document.getElementById("score").textContent = p.score;
     speak(L.w);
     document.getElementById("winTitle").textContent = "⭕ せいかい！ +" + pts;
     document.getElementById("winPic").textContent = L.pic;
@@ -328,7 +387,7 @@ function check() {
     document.getElementById("winBreak").textContent = L.parts.join(" ＋ ") + " → " + L.w;
     document.getElementById("winFun").textContent = "💡 " + L.fun;
     document.getElementById("nextBtn").textContent =
-      lv + 1 < LEVELS.length ? "つぎへ ▶" : "けっか発表 🏆";
+      progress[course].lv + 1 < COURSE_LEN ? "つぎへ ▶" : "コースクリア！🏆";
     document.getElementById("winOverlay").classList.add("show");
     return;
   }
@@ -346,27 +405,30 @@ function check() {
 }
 
 function next() {
-  if (finished) {
-    finished = false;
-    lv = 0; score = 0;
+  const p = progress[course];
+  if (courseDone) {
+    // コースクリア画面 → 進み具合をリセットしてコース選択へ
+    p.lv = 0; p.score = 0;
     save();
-    document.getElementById("winOverlay").classList.remove("show");
-    startLevel();
+    showCourseSelect();
     return;
   }
-  if (lv + 1 < LEVELS.length) {
+  if (p.lv + 1 < COURSE_LEN) {
     document.getElementById("winOverlay").classList.remove("show");
-    lv++;
+    p.lv++;
     save();
     startLevel();
   } else {
-    finished = true;
-    document.getElementById("winTitle").textContent = "👑 全ステージクリア！";
+    courseDone = true;
+    p.cleared = true;
+    p.best = Math.max(p.best, p.score);
+    save();
+    document.getElementById("winTitle").textContent = "👑 コースクリア！";
     document.getElementById("winPic").textContent = "🎓";
-    document.getElementById("winWord").textContent = score + "点";
-    document.getElementById("winBreak").textContent = "";
-    document.getElementById("winFun").textContent = score >= LEVELS.length * 100 ? "💡 ノーヒント全問クリア！キミはフォニックスの達人！" : "💡 もう一度あそぶとスコアを伸ばせるよ";
-    document.getElementById("nextBtn").textContent = "さいしょから 🔁";
+    document.getElementById("winWord").textContent = p.score + "点";
+    document.getElementById("winBreak").textContent = COURSES[course].name + " 完走！";
+    document.getElementById("winFun").textContent = p.score >= COURSE_LEN * 100 ? "💡 ノーヒント全問クリア！キミはフォニックスの達人！" : "💡 もう一回あそぶとスコアを伸ばせるよ";
+    document.getElementById("nextBtn").textContent = "コースせんたくへ 📚";
   }
 }
 
@@ -378,22 +440,24 @@ function toast(html) {
   toastTimer = setTimeout(() => toastEl.classList.remove("show"), 3000);
 }
 
-document.getElementById("speakBtn").addEventListener("click", () => speak(LEVELS[lv].w));
-document.getElementById("checkBtn").addEventListener("click", check);
-document.getElementById("clearBtn").addEventListener("click", () => { seq = []; renderBuild(); });
+document.getElementById("speakBtn").addEventListener("click", () => { if (course !== null) speak(curLevel().w); });
+document.getElementById("checkBtn").addEventListener("click", () => { if (course !== null) check(); });
+document.getElementById("clearBtn").addEventListener("click", () => { seq = []; if (course !== null) renderBuild(); });
 document.getElementById("hintBtn").addEventListener("click", () => {
+  if (course === null) return;
   hintUsed = true;
   const hs = document.getElementById("hintShow");
   hs.hidden = false;
-  hs.textContent = "ヒント： " + LEVELS[lv].w;
+  hs.textContent = "ヒント： " + curLevel().w;
 });
+document.getElementById("courseBtn").addEventListener("click", showCourseSelect);
 document.getElementById("nextBtn").addEventListener("click", next);
-document.getElementById("againBtn").addEventListener("click", () => speak(LEVELS[lv].w));
-document.getElementById("slowBtn").addEventListener("click", () => speak(LEVELS[lv].w, 0.4));
+document.getElementById("againBtn").addEventListener("click", () => { if (course !== null) speak(curLevel().w); });
+document.getElementById("slowBtn").addEventListener("click", () => { if (course !== null) speak(curLevel().w, 0.4); });
 
 if (window.speechSynthesis) speechSynthesis.getVoices();
 
-startLevel();
+showCourseSelect();
 </script>
 </body>
 </html>
